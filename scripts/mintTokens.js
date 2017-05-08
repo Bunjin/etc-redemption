@@ -1,6 +1,6 @@
 const fs = require('fs');
 const eachLimit = require('../node_modules/async/eachLimit');
-const { scriptsDir, toBlock } = require('./helpers/config');
+const { minimumDgdWei, scriptsDir, toBlock } = require('./helpers/config');
 
 const Token = artifacts.require('EtcRedemptionToken');
 
@@ -18,35 +18,45 @@ function mintTokens({ data, token }) {
       const j = i;
       function mint() {
         const { combined } = data.balances[address];
-        token.mint(address, combined).then(({ receipt: { transactionHash, blockNumber } }) => {
-          console.log(`${address} ${transactionHash} ${combined} -- ${j} / ${addresses.length}`);
-          transactions.push({
-            transactionHash,
-            blockNumber,
-            address,
-            tokens: combined,
-          });
+        if (combined < minimumDgdWei) {
+          console.log(`${address} SKIPPED ${combined} -- ${j} / ${addresses.length}`);
           cb();
-        }).catch((e) => {
-          console.log(e, 'retrying...', i);
-          mint();
-        });
+        } else {
+          token.mint(address, combined).then(({ receipt: { transactionHash, blockNumber } }) => {
+            console.log(`${address} ${transactionHash} ${combined} -- ${j} / ${addresses.length}`);
+            transactions.push({
+              transactionHash,
+              blockNumber,
+              address,
+              tokens: combined,
+            });
+            cb();
+          }).catch((e) => {
+            console.log(e, 'retrying...', i);
+            mint();
+          });
+        }
       }
       mint();
     }, resolve);
   });
 }
 
+
 module.exports = async function () {
   const token = await Token.deployed();
-  const output = `${scriptsDir}transactions-${toBlock}-${new Date().getTime()}`;
+  const output = `${scriptsDir}/transactions-${toBlock}-${new Date().getTime()}.json`;
   const filename = fs.readdirSync(scriptsDir).filter(a => a.indexOf(`balances-${toBlock}-`) === 0)[0];
   const data = JSON.parse(fs.readFileSync(`${scriptsDir}/${filename}`));
   // write the report on exit, catching errors
+  let written = false;
   function exitHandler() {
-    fs.writeFileSync(output, JSON.stringify(transactions));
-    console.log(`wrote: transactions-${toBlock}-${new Date().getTime()}`);
-    process.exit();
+    if (!written) {
+      written = true;
+      fs.writeFileSync(output, JSON.stringify(transactions));
+      console.log(`wrote: ${output}`);
+      process.exit();
+    }
   }
   process.on('exit', exitHandler);
   process.on('SIGINT', exitHandler);
